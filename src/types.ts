@@ -1,8 +1,6 @@
 export type QuestionType =
   | 'multiple_choice'
   | 'true_false'
-  | 'fill_blank'
-  | 'match_pairs'
   | 'external_embed';
 
 export interface OptionItem {
@@ -36,8 +34,8 @@ export interface Question {
   timeLimit: number; // in seconds (e.g. 10, 20, 30, 60)
   points: number; // default 1000
   options?: OptionItem[];
-  correctText?: string; // for fill_blank (comma-separated if multiple acceptable)
-  pairs?: PairItem[]; // for match_pairs
+  correctText?: string;
+  pairs?: PairItem[];
   externalGameConfig?: ExternalGameConfig;
 }
 
@@ -66,21 +64,12 @@ export interface Player {
   isBot?: boolean;
 }
 
-export interface CurrentQuestionMeta {
-  type: QuestionType;
-  title?: string;
-  optionsCount: number;
-  correctCount: number;
-  allowMultiSelect: boolean;
-}
-
 export interface PlayerAnswerRecord {
   playerId: string;
   nickname: string;
   questionId: string;
   questionIndex: number;
   selectedOptionId?: string;
-  selectedOptionIds?: string[];
   answeredText?: string;
   matchedPairs?: Record<string, string>;
   isCorrect: boolean;
@@ -105,9 +94,13 @@ export interface GameRoom {
   hostId: string;
   status: RoomStatus;
   currentQuestionIndex: number;
+  totalQuestions?: number;
+  currentQuestionType?: QuestionType;
+  currentQuestionTitle?: string;
+  currentQuestionOptionsCount?: number;
+  skipLeaderboardMode?: boolean;
   questionStartedAt: number;
   timeRemaining: number;
-  currentQuestionMeta?: CurrentQuestionMeta;
   players: Record<string, Player>;
   answers: PlayerAnswerRecord[];
   createdAt: number;

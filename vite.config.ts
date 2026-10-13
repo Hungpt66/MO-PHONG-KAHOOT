@@ -8,8 +8,12 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname || process.cwd(), '.'),
       },
+    },
+    build: {
+      target: ['es2020', 'chrome64', 'edge79', 'firefox67', 'safari12'],
+      cssTarget: ['es2020', 'chrome64', 'edge79', 'firefox67', 'safari12'],
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

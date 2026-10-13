@@ -11,7 +11,6 @@ import {
   Award,
   ChevronRight,
   Flame,
-  Edit3,
 } from 'lucide-react';
 import { Quiz, Question } from '../types';
 import { calculateKahootScore } from '../utils/scoring';
@@ -19,10 +18,9 @@ import { sound } from '../utils/audio';
 
 interface AsyncSelfPacedViewProps {
   quizzes: Quiz[];
-  onEditQuiz?: (quizId: string) => void;
 }
 
-export const AsyncSelfPacedView: React.FC<AsyncSelfPacedViewProps> = ({ quizzes, onEditQuiz }) => {
+export const AsyncSelfPacedView: React.FC<AsyncSelfPacedViewProps> = ({ quizzes }) => {
   const [selectedQuiz, setSelectedQuiz] = useState<Quiz>(quizzes[0]);
   const [gameStarted, setGameStarted] = useState(false);
   const [currentQIndex, setCurrentQIndex] = useState(0);
@@ -37,9 +35,6 @@ export const AsyncSelfPacedView: React.FC<AsyncSelfPacedViewProps> = ({ quizzes,
   const [answeredCorrect, setAnsweredCorrect] = useState<boolean | null>(null);
   const [pointsEarnedThisQ, setPointsEarnedThisQ] = useState(0);
 
-  // Fill in blank
-  const [fillText, setFillText] = useState('');
-
   const timerRef = useRef<number | null>(null);
   const questionStartTimeRef = useRef<number>(Date.now());
 
@@ -53,7 +48,6 @@ export const AsyncSelfPacedView: React.FC<AsyncSelfPacedViewProps> = ({ quizzes,
     setHasAnswered(false);
     setSelectedOptId(null);
     setAnsweredCorrect(null);
-    setFillText('');
     questionStartTimeRef.current = Date.now();
 
     if (timerRef.current) clearInterval(timerRef.current);
@@ -103,32 +97,6 @@ export const AsyncSelfPacedView: React.FC<AsyncSelfPacedViewProps> = ({ quizzes,
       if (nextStreak > 1) {
         setTimeout(() => sound.playStreak(), 400);
       }
-    } else {
-      sound.playWrong();
-      setStreak(0);
-      setPointsEarnedThisQ(0);
-    }
-  };
-
-  const handleAnswerFillBlank = () => {
-    if (hasAnswered || !fillText.trim()) return;
-    if (timerRef.current) clearInterval(timerRef.current);
-
-    setHasAnswered(true);
-    const normalizedInput = fillText.trim().toLowerCase();
-    const correctList = (currentQ.correctText || '').split(',').map((s) => s.trim().toLowerCase());
-    const isCorrect = correctList.includes(normalizedInput);
-    setAnsweredCorrect(isCorrect);
-
-    const elapsedMs = Date.now() - questionStartTimeRef.current;
-
-    if (isCorrect) {
-      sound.playCorrect();
-      const nextStreak = streak + 1;
-      setStreak(nextStreak);
-      const scoreData = calculateKahootScore(elapsedMs, currentQ.timeLimit, currentQ.points, nextStreak);
-      setPointsEarnedThisQ(scoreData.points);
-      setScore((prev) => prev + scoreData.points);
     } else {
       sound.playWrong();
       setStreak(0);
@@ -205,27 +173,9 @@ export const AsyncSelfPacedView: React.FC<AsyncSelfPacedViewProps> = ({ quizzes,
                   </span>
                   <h3 className="font-bold text-base text-gray-900 mt-2">{quiz.title}</h3>
                   <p className="text-xs text-gray-500 mt-1 line-clamp-2">{quiz.description}</p>
-                  <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500 font-medium">
-                    <div className="flex items-center gap-1.5">
-                      <span>{quiz.questions.length} câu hỏi</span>
-                      <span>•</span>
-                      <span className="text-[#008049] font-bold">{quiz.questions.length * 1000} đ</span>
-                    </div>
-
-                    {onEditQuiz && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onEditQuiz(quiz.id);
-                        }}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition-all shadow-sm"
-                        title="Chỉnh sửa câu hỏi trong bộ đề này"
-                      >
-                        <Edit3 className="w-3.5 h-3.5 text-amber-600" />
-                        <span>Sửa câu hỏi</span>
-                      </button>
-                    )}
+                  <div className="mt-4 pt-3 border-t border-gray-100 flex justify-between text-xs text-gray-500 font-medium">
+                    <span>{quiz.questions.length} câu hỏi</span>
+                    <span className="text-[#008049] font-bold">Điểm tối đa: {quiz.questions.length * 1000} đ</span>
                   </div>
                 </div>
               ))}

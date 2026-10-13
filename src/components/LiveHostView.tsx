@@ -18,7 +18,6 @@ import {
   Download,
   RotateCcw,
   Clock,
-  Edit3,
 } from 'lucide-react';
 import { GameRoom, Quiz, RoomStatus, LMSReport } from '../types';
 import { sound } from '../utils/audio';
@@ -29,7 +28,6 @@ interface LiveHostViewProps {
   onRoomCreated: (room: GameRoom) => void;
   onRoomUpdated: (room: GameRoom) => void;
   onOpenPlayerWithPin?: (pin: string) => void;
-  onEditQuiz?: (quizId: string) => void;
 }
 
 export const LiveHostView: React.FC<LiveHostViewProps> = ({
@@ -38,7 +36,6 @@ export const LiveHostView: React.FC<LiveHostViewProps> = ({
   onRoomCreated,
   onRoomUpdated,
   onOpenPlayerWithPin,
-  onEditQuiz,
 }) => {
   const [selectedQuizId, setSelectedQuizId] = useState<string>(quizzes[0]?.id || '');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
@@ -352,32 +349,14 @@ export const LiveHostView: React.FC<LiveHostViewProps> = ({
                   </div>
 
                   <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
-                    <div className="flex items-center gap-1.5">
-                      <span>{quiz.questions.length} câu hỏi</span>
-                      <span>•</span>
-                      <span className="font-medium text-emerald-800">
-                        ~
-                        {Math.round(
-                          quiz.questions.reduce((acc, q) => acc + q.timeLimit, 0) / 60
-                        )}{' '}
-                        phút
-                      </span>
-                    </div>
-
-                    {onEditQuiz && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onEditQuiz(quiz.id);
-                        }}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition-all shadow-sm"
-                        title="Chỉnh sửa câu hỏi trong bộ đề này"
-                      >
-                        <Edit3 className="w-3.5 h-3.5 text-amber-600" />
-                        <span>Sửa câu hỏi</span>
-                      </button>
-                    )}
+                    <span>{quiz.questions.length} câu hỏi / vòng chơi</span>
+                    <span className="font-medium text-emerald-800">
+                      ~
+                      {Math.round(
+                        quiz.questions.reduce((acc, q) => acc + q.timeLimit, 0) / 60
+                      )}{' '}
+                      phút
+                    </span>
                   </div>
                 </div>
               );
@@ -577,14 +556,29 @@ export const LiveHostView: React.FC<LiveHostViewProps> = ({
                 Câu hỏi {activeRoom.currentQuestionIndex + 1} / {currentQuiz.questions.length}
               </span>
 
-              {/* Skip button */}
-              <button
-                onClick={() => handleUpdateStatus('question_result')}
-                className="flex items-center gap-1 text-xs font-bold text-gray-500 hover:text-[#008049] px-2.5 py-1 rounded-lg border border-gray-200 hover:border-[#008049] transition-all"
-              >
-                <SkipForward className="w-3.5 h-3.5" />
-                <span>Bỏ qua / Kết thúc câu</span>
-              </button>
+              {/* Action buttons */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleUpdateStatus('question_result')}
+                  className="flex items-center gap-1 text-xs font-bold text-gray-600 hover:text-[#008049] px-2.5 py-1.5 rounded-lg border border-gray-200 hover:border-[#008049] transition-all bg-white shadow-sm"
+                  title="Kết thúc đếm giờ câu hiện tại"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Kết thúc câu</span>
+                </button>
+                {activeRoom.currentQuestionIndex < currentQuiz.questions.length - 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateStatus('question', activeRoom.currentQuestionIndex + 1)}
+                    className="flex items-center gap-1 text-xs font-bold bg-emerald-50 text-[#008049] hover:bg-[#008049] hover:text-white px-2.5 py-1.5 rounded-lg border border-emerald-300 transition-all shadow-sm"
+                    title="Chuyển thẳng sang câu tiếp theo ngay lập tức"
+                  >
+                    <SkipForward className="w-3.5 h-3.5" />
+                    <span>Sang câu kế tiếp</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Question Title */}
@@ -669,27 +663,6 @@ export const LiveHostView: React.FC<LiveHostViewProps> = ({
             </div>
           )}
 
-          {currentQuestion.type === 'fill_blank' && (
-            <div className="bg-white rounded-2xl p-8 border border-gray-200 shadow-sm text-center">
-              <p className="text-sm font-bold text-gray-500 mb-2">Học viên đang gõ câu trả lời trên thiết bị cá nhân...</p>
-              <div className="text-2xl font-mono font-black text-gray-400">_ _ _ _ _ _ _ _ _ _</div>
-            </div>
-          )}
-
-          {currentQuestion.type === 'match_pairs' && currentQuestion.pairs && (
-            <div className="bg-white rounded-2xl p-6 border border-gray-200 shadow-sm">
-              <h4 className="text-xs font-bold text-gray-500 uppercase mb-3">Các cặp cần ghép nối:</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {currentQuestion.pairs.map((p) => (
-                  <div key={p.id} className="p-3 bg-gray-50 rounded-xl border border-gray-200 text-xs">
-                    <strong className="text-[#004D2C]">{p.left}</strong>
-                    <span className="mx-2 text-gray-400">⇄</span>
-                    <span className="text-gray-700">{p.right}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     );
@@ -699,13 +672,24 @@ export const LiveHostView: React.FC<LiveHostViewProps> = ({
   if (activeRoom.status === 'question_result' && currentQuestion) {
     const isLastQuestion = activeRoom.currentQuestionIndex >= currentQuiz.questions.length - 1;
 
-    // Distribution of answers
+    // Distribution of answers (supporting option id, opt_1..4 index, and true/false)
     const optionCounts: Record<string, number> = {};
     if (currentQuestion.options) {
       currentQuestion.options.forEach((opt) => (optionCounts[opt.id] = 0));
       currentQAnswers.forEach((a) => {
-        if (a.selectedOptionId && optionCounts[a.selectedOptionId] !== undefined) {
+        if (!a.selectedOptionId) return;
+        if (optionCounts[a.selectedOptionId] !== undefined) {
           optionCounts[a.selectedOptionId]++;
+        } else if (a.selectedOptionId.startsWith('opt_')) {
+          const idx = parseInt(a.selectedOptionId.replace('opt_', ''), 10) - 1;
+          const opt = currentQuestion.options?.[idx];
+          if (opt && optionCounts[opt.id] !== undefined) {
+            optionCounts[opt.id]++;
+          }
+        } else if ((a.selectedOptionId === 'tf_true' || a.selectedOptionId === 'tf_1') && currentQuestion.options?.[0]) {
+          optionCounts[currentQuestion.options[0].id]++;
+        } else if ((a.selectedOptionId === 'tf_false' || a.selectedOptionId === 'tf_2') && currentQuestion.options?.[1]) {
+          optionCounts[currentQuestion.options[1].id]++;
         }
       });
     }
@@ -718,7 +702,7 @@ export const LiveHostView: React.FC<LiveHostViewProps> = ({
           {/* Top banner */}
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 text-center">
             <span className="text-xs font-bold uppercase tracking-wider text-emerald-700 block mb-1">
-              KẾT QUẢ CÂU HỎI {activeRoom.currentQuestionIndex + 1}
+              KẾT QUẢ CÂU HỎI {activeRoom.currentQuestionIndex + 1} / {currentQuiz.questions.length}
             </span>
             <h2 className="text-xl sm:text-2xl font-extrabold text-[#004D2C]">{currentQuestion.title}</h2>
           </div>
@@ -727,9 +711,10 @@ export const LiveHostView: React.FC<LiveHostViewProps> = ({
           <div className="my-6 bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
             <h3 className="text-sm font-bold text-gray-600 mb-6 flex items-center gap-2">
               <BarChart className="w-4 h-4 text-[#008049]" />
-              <span>Biểu đồ thống kê đáp án cả lớp:</span>
+              <span>Thống kê lựa chọn của học viên:</span>
             </h3>
 
+            {/* 4-option Multiple Choice chart */}
             {currentQuestion.type === 'multiple_choice' && currentQuestion.options && (
               <div className="grid grid-cols-4 gap-4 items-end h-64 px-4 pb-2 border-b border-gray-200">
                 {currentQuestion.options.map((opt, idx) => {
@@ -762,26 +747,90 @@ export const LiveHostView: React.FC<LiveHostViewProps> = ({
               </div>
             )}
 
-            {currentQuestion.type === 'fill_blank' && (
-              <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-200 text-center">
-                <span className="text-xs text-gray-500 font-semibold block">Đáp án chính xác được chấp nhận:</span>
-                <div className="text-xl font-black text-[#008049] mt-1">
-                  "{currentQuestion.correctText?.split(',')[0]}"
-                </div>
+            {/* 2-option True / False chart */}
+            {currentQuestion.type === 'true_false' && currentQuestion.options && (
+              <div className="grid grid-cols-2 gap-8 items-end h-64 px-8 pb-2 border-b border-gray-200 max-w-lg mx-auto">
+                {currentQuestion.options.map((opt, idx) => {
+                  const count = optionCounts[opt.id] || 0;
+                  const heightPercent = Math.max(16, Math.round((count / maxCount) * 100));
+                  const isTrue = idx === 0;
+
+                  return (
+                    <div key={opt.id} className="flex flex-col items-center h-full justify-end">
+                      <span className="text-base font-black text-gray-800 mb-1.5">{count} học viên</span>
+                      <div
+                        className={`w-full ${
+                          isTrue ? 'bg-[#008049]' : 'bg-[#E03E36]'
+                        } rounded-t-2xl transition-all duration-700 relative flex flex-col items-center justify-center text-white py-3 ${
+                          opt.isCorrect ? 'ring-4 ring-emerald-400 shadow-xl' : 'opacity-80'
+                        }`}
+                        style={{ height: `${heightPercent}%` }}
+                      >
+                        {opt.isCorrect && (
+                          <span className="absolute -top-4 bg-emerald-700 text-white rounded-full p-1.5 shadow-md">
+                            <Check className="w-4 h-4" />
+                          </span>
+                        )}
+                        <span className="text-2xl font-black">{isTrue ? '✓' : '✗'}</span>
+                        <span className="text-xs font-black uppercase mt-1">{isTrue ? 'Đúng' : 'Sai'}</span>
+                      </div>
+                      <span className="text-xs font-bold text-gray-600 mt-2 text-center line-clamp-1">
+                        {opt.text}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
 
-          {/* Action button: Show Leaderboard */}
-          <div className="flex justify-end">
-            <button
-              id="show-leaderboard-btn"
-              onClick={() => handleUpdateStatus('leaderboard')}
-              className="bg-[#008049] hover:bg-[#00683a] text-white px-8 py-3.5 rounded-2xl font-black text-base shadow-lg transition-all flex items-center gap-2"
-            >
-              <Trophy className="w-5 h-5 text-[#FFCC00]" />
-              <span>Xem Bảng Xếp Hạng</span>
-            </button>
+          {/* Action buttons: Direct next question without leaderboard OR Show Leaderboard */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+            <div className="flex items-center gap-2 text-xs text-gray-500 font-semibold">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#008049] animate-pulse"></span>
+              <span>
+                {isLastQuestion
+                  ? 'Đây là câu hỏi cuối cùng của bộ đề'
+                  : `Câu tiếp theo: ${activeRoom.currentQuestionIndex + 2} / ${currentQuiz.questions.length}`}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 flex-wrap justify-end w-full sm:w-auto">
+              {/* Optional: Xem BXH nếu muốn */}
+              <button
+                id="show-leaderboard-btn"
+                type="button"
+                onClick={() => handleUpdateStatus('leaderboard')}
+                className="bg-white hover:bg-gray-100 text-gray-700 px-5 py-3.5 rounded-2xl font-bold text-sm border-2 border-gray-300 shadow-sm transition-all flex items-center gap-2"
+                title="Xem bảng xếp hạng học viên dẫn đầu"
+              >
+                <Trophy className="w-4 h-4 text-amber-500" />
+                <span>Xem Bảng Xếp Hạng</span>
+              </button>
+
+              {/* DIRECT NEXT QUESTION BUTTON: Bỏ qua bước Xem bảng xếp hạng */}
+              {isLastQuestion ? (
+                <button
+                  id="finish-game-direct-btn"
+                  type="button"
+                  onClick={() => handleUpdateStatus('finished')}
+                  className="bg-[#FFCC00] hover:bg-yellow-400 text-[#004D2C] px-8 py-3.5 rounded-2xl font-black text-base shadow-xl transition-all flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  <Award className="w-5 h-5 text-[#004D2C]" />
+                  <span>Xem Bục Vinh Quang (Kết Thúc)</span>
+                </button>
+              ) : (
+                <button
+                  id="next-question-direct-btn"
+                  type="button"
+                  onClick={() => handleUpdateStatus('question', activeRoom.currentQuestionIndex + 1)}
+                  className="bg-[#008049] hover:bg-[#00683a] text-white px-8 py-3.5 rounded-2xl font-black text-base shadow-xl transition-all flex items-center gap-2 ring-2 ring-emerald-300 hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  <span>Câu Tiếp Theo (Không Cần Qua BXH)</span>
+                  <SkipForward className="w-5 h-5 text-[#FFCC00]" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

@@ -1,16 +1,29 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import { GameRoom, Player, PlayerAnswerRecord, Quiz, LMSReport, RoomStatus } from './src/types';
 import { INITIAL_QUIZZES } from './src/data/sampleQuizzes';
 import { calculateKahootScore } from './src/utils/scoring';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Safe directory resolver for ESM (tsx / Node ESM) and bundled CJS
+const currentDir = (() => {
+  if (typeof __dirname !== 'undefined' && __dirname) {
+    return __dirname;
+  }
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta && import.meta.url) {
+      return path.dirname(fileURLToPath(import.meta.url));
+    }
+  } catch {
+    // fallback
+  }
+  return process.cwd();
+})();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -80,16 +93,6 @@ app.get('/api/quizzes', (req, res) => {
   res.json(Array.from(quizzesStore.values()));
 });
 
-// Get single quiz by ID
-app.get('/api/quizzes/:id', (req, res) => {
-  const { id } = req.params;
-  const quiz = quizzesStore.get(id);
-  if (!quiz) {
-    return res.status(404).json({ error: 'Không tìm thấy bộ câu hỏi' });
-  }
-  res.json(quiz);
-});
-
 // Save/create quiz
 app.post('/api/quizzes', (req, res) => {
   const newQuiz = req.body as Quiz;
@@ -97,124 +100,8 @@ app.post('/api/quizzes', (req, res) => {
     newQuiz.id = 'quiz_' + Date.now();
   }
   newQuiz.updatedAt = new Date().toISOString();
-  if (!newQuiz.createdAt) {
-    newQuiz.createdAt = new Date().toISOString();
-  }
   quizzesStore.set(newQuiz.id, newQuiz);
   res.json({ success: true, quiz: newQuiz });
-});
-
-// Update existing quiz and its questions
-app.put('/api/quizzes/:id', (req, res) => {
-  const { id } = req.params;
-  const updatedData = req.body as Partial<Quiz>;
-  const existing = quizzesStore.get(id);
-
-  if (!existing) {
-    return res.status(404).json({ error: 'Không tìm thấy bộ câu hỏi để chỉnh sửa' });
-  }
-
-  const updatedQuiz: Quiz = {
-    ...existing,
-    ...updatedData,
-    id, // preserve ID
-    updatedAt: new Date().toISOString(),
-  };
-
-  quizzesStore.set(id, updatedQuiz);
-  res.json({ success: true, quiz: updatedQuiz });
-});
-
-// Clone/Duplicate a quiz
-app.post('/api/quizzes/:id/clone', (req, res) => {
-  const { id } = req.params;
-  const sourceQuiz = quizzesStore.get(id);
-  if (!sourceQuiz) {
-    return res.status(404).json({ error: 'Không tìm thấy bộ đề để nhân bản' });
-  }
-
-  const clonedId = 'quiz_' + Date.now();
-  const clonedQuiz: Quiz = {
-    ...sourceQuiz,
-    id: clonedId,
-    title: `${sourceQuiz.title} (Bản sao)`,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    isPreset: false,
-    questions: sourceQuiz.questions.map((q) => ({
-      ...q,
-      id: 'q_' + Math.random().toString(36).substring(2, 9),
-    })),
-  };
-
-  quizzesStore.set(clonedId, clonedQuiz);
-  res.json({ success: true, quiz: clonedQuiz });
-});
-
-// Update a specific question in a quiz
-app.put('/api/quizzes/:id/questions/:questionId', (req, res) => {
-  const { id, questionId } = req.params;
-  const updatedQuestion = req.body;
-  const quiz = quizzesStore.get(id);
-
-  if (!quiz) {
-    return res.status(404).json({ error: 'Không tìm thấy bộ câu hỏi' });
-  }
-
-  const index = quiz.questions.findIndex((q) => q.id === questionId);
-  if (index === -1) {
-    return res.status(404).json({ error: 'Không tìm thấy câu hỏi trong đề' });
-  }
-
-  quiz.questions[index] = { ...quiz.questions[index], ...updatedQuestion, id: questionId };
-  quiz.updatedAt = new Date().toISOString();
-  quizzesStore.set(id, quiz);
-
-  res.json({ success: true, question: quiz.questions[index], quiz });
-});
-
-// Add a question to an existing quiz
-app.post('/api/quizzes/:id/questions', (req, res) => {
-  const { id } = req.params;
-  const newQuestion = req.body;
-  const quiz = quizzesStore.get(id);
-
-  if (!quiz) {
-    return res.status(404).json({ error: 'Không tìm thấy bộ câu hỏi' });
-  }
-
-  if (!newQuestion.id) {
-    newQuestion.id = 'q_' + Date.now();
-  }
-
-  quiz.questions.push(newQuestion);
-  quiz.updatedAt = new Date().toISOString();
-  quizzesStore.set(id, quiz);
-
-  res.json({ success: true, question: newQuestion, quiz });
-});
-
-// Delete a question from a quiz
-app.delete('/api/quizzes/:id/questions/:questionId', (req, res) => {
-  const { id, questionId } = req.params;
-  const quiz = quizzesStore.get(id);
-
-  if (!quiz) {
-    return res.status(404).json({ error: 'Không tìm thấy bộ câu hỏi' });
-  }
-
-  quiz.questions = quiz.questions.filter((q) => q.id !== questionId);
-  quiz.updatedAt = new Date().toISOString();
-  quizzesStore.set(id, quiz);
-
-  res.json({ success: true, quiz });
-});
-
-// Reset to default sample quizzes
-app.post('/api/quizzes/reset-defaults', (req, res) => {
-  quizzesStore.clear();
-  INITIAL_QUIZZES.forEach((q) => quizzesStore.set(q.id, JSON.parse(JSON.stringify(q))));
-  res.json({ success: true, quizzes: Array.from(quizzesStore.values()) });
 });
 
 // Delete quiz
@@ -240,6 +127,10 @@ app.post('/api/rooms/create', (req, res) => {
     hostId,
     status: 'lobby',
     currentQuestionIndex: 0,
+    totalQuestions: quiz.questions.length,
+    currentQuestionType: quiz.questions[0]?.type || 'multiple_choice',
+    currentQuestionTitle: quiz.questions[0]?.title || '',
+    currentQuestionOptionsCount: quiz.questions[0]?.options?.length || 4,
     questionStartedAt: 0,
     timeRemaining: 0,
     players: {},
@@ -367,19 +258,20 @@ app.post('/api/rooms/:pin/status', (req, res) => {
   }
 
   const quiz = quizzesStore.get(room.quizId);
+  if (quiz) {
+    room.totalQuestions = quiz.questions.length;
+    const currentQ = quiz.questions[room.currentQuestionIndex];
+    if (currentQ) {
+      room.currentQuestionType = currentQ.type;
+      room.currentQuestionTitle = currentQ.title;
+      room.currentQuestionOptionsCount = currentQ.options?.length || (currentQ.type === 'true_false' ? 2 : 4);
+    }
+  }
+
   if (status === 'question' && quiz) {
     const currentQ = quiz.questions[room.currentQuestionIndex];
     room.questionStartedAt = Date.now();
     room.timeRemaining = currentQ ? currentQ.timeLimit : 20;
-
-    const correctCount = currentQ?.options?.filter((o) => o.isCorrect).length || 1;
-    room.currentQuestionMeta = currentQ ? {
-      type: currentQ.type,
-      title: currentQ.title,
-      optionsCount: currentQ.options?.length || 0,
-      correctCount,
-      allowMultiSelect: currentQ.type === 'multiple_choice' && correctCount > 1,
-    } : undefined;
 
     // Trigger auto bot answers if bots exist in room
     setTimeout(() => {
@@ -411,25 +303,11 @@ app.post('/api/rooms/:pin/status', (req, res) => {
           p.lastAnswerCorrect = isCorrect;
           p.lastPointsEarned = pointsEarned;
 
-          // Pick bot options
-          const correctOpts = q.options?.filter((o) => o.isCorrect) || [];
-          const wrongOpts = q.options?.filter((o) => !o.isCorrect) || [];
-          let botSelectedId = 'opt_1';
-          if (isCorrect && correctOpts.length > 0) {
-            botSelectedId = correctOpts[Math.floor(Math.random() * correctOpts.length)].id;
-          } else if (!isCorrect && wrongOpts.length > 0) {
-            botSelectedId = wrongOpts[Math.floor(Math.random() * wrongOpts.length)].id;
-          } else if (q.options && q.options.length > 0) {
-            botSelectedId = q.options[0].id;
-          }
-
           currentRoom.answers.push({
             playerId: p.id,
             nickname: p.nickname,
             questionId: q.id,
             questionIndex: currentRoom.currentQuestionIndex,
-            selectedOptionId: botSelectedId,
-            selectedOptionIds: [botSelectedId],
             isCorrect,
             timeMs: randomDelay,
             pointsEarned,
@@ -457,7 +335,7 @@ app.post('/api/rooms/:pin/status', (req, res) => {
 // Player submits answer
 app.post('/api/rooms/:pin/answer', (req, res) => {
   const { pin } = req.params;
-  const { playerId, selectedOptionId, selectedOptionIds, answeredText, matchedPairs, timeElapsedMs } = req.body;
+  const { playerId, selectedOptionId, answeredText, matchedPairs, timeElapsedMs } = req.body;
 
   const room = roomsStore.get(pin);
   if (!room) {
@@ -487,30 +365,27 @@ app.post('/api/rooms/:pin/answer', (req, res) => {
     return res.status(400).json({ error: 'Bạn đã nộp đáp án cho câu này rồi' });
   }
 
-  // Grade answer
+  // Grade answer: Only 4-option multiple choice and True/False questions
   let isCorrect = false;
   if (currentQ.type === 'multiple_choice' || currentQ.type === 'true_false') {
-    const correctOpts = currentQ.options?.filter((o) => o.isCorrect) || [];
-    const correctOptIds = correctOpts.map((o) => o.id);
-
-    if (Array.isArray(selectedOptionIds) && selectedOptionIds.length > 0) {
-      // If player submitted an array of selected options
-      const hasInvalidOption = selectedOptionIds.some((id) => !correctOptIds.includes(id));
-      const hasAtLeastOneCorrect = selectedOptionIds.some((id) => correctOptIds.includes(id));
-      isCorrect = !hasInvalidOption && hasAtLeastOneCorrect;
-    } else if (selectedOptionId) {
-      // If player submitted a single option: correct if that option is marked as correct
-      isCorrect = correctOptIds.includes(selectedOptionId);
+    const correctOpt = currentQ.options?.find((o) => o.isCorrect);
+    let isMatched = false;
+    if (correctOpt) {
+      if (correctOpt.id === selectedOptionId) {
+        isMatched = true;
+      } else if (typeof selectedOptionId === 'string' && selectedOptionId.startsWith('opt_')) {
+        const optIndex = parseInt(selectedOptionId.replace('opt_', ''), 10) - 1;
+        const chosenOpt = currentQ.options?.[optIndex];
+        if (chosenOpt && chosenOpt.id === correctOpt.id) {
+          isMatched = true;
+        }
+      } else if (selectedOptionId === 'tf_true' || selectedOptionId === 'tf_1') {
+        isMatched = currentQ.options?.[0]?.isCorrect === true;
+      } else if (selectedOptionId === 'tf_false' || selectedOptionId === 'tf_2') {
+        isMatched = currentQ.options?.[1]?.isCorrect === true;
+      }
     }
-  } else if (currentQ.type === 'fill_blank') {
-    const normalizedInput = (answeredText || '').trim().toLowerCase();
-    const correctAnswers = (currentQ.correctText || '').split(',').map((s) => s.trim().toLowerCase());
-    isCorrect = correctAnswers.includes(normalizedInput);
-  } else if (currentQ.type === 'match_pairs') {
-    // All pairs must be matched correctly
-    if (currentQ.pairs && matchedPairs) {
-      isCorrect = currentQ.pairs.every((pair) => matchedPairs[pair.id] === pair.right);
-    }
+    isCorrect = isMatched;
   }
 
   // Calculate points
@@ -532,8 +407,7 @@ app.post('/api/rooms/:pin/answer', (req, res) => {
     nickname: player.nickname,
     questionId: currentQ.id,
     questionIndex: room.currentQuestionIndex,
-    selectedOptionId: selectedOptionId || (selectedOptionIds?.[0]),
-    selectedOptionIds: selectedOptionIds || (selectedOptionId ? [selectedOptionId] : undefined),
+    selectedOptionId,
     answeredText,
     matchedPairs,
     isCorrect,
@@ -614,25 +488,29 @@ app.post('/api/ai/generate-quiz', async (req, res) => {
     }
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const prompt = `Bạn là chuyên gia đào tạo và ra đề thi trắc nghiệm trực tuyến cho Ngân hàng TMCP Đầu tư và Phát triển Việt Nam (BIDV).
-Hãy tạo một bộ câu hỏi hoàn toàn là câu hỏi trắc nghiệm gồm ${questionCount} câu hỏi về chủ đề: "${topic}".
-Toàn bộ câu hỏi phải là hình thức trắc nghiệm: trắc nghiệm 4 lựa chọn (multiple_choice) hoặc trắc nghiệm Đúng/Sai (true_false). TUYỆT ĐỐI KHÔNG dùng câu hỏi điền từ.
+    const prompt = `Bạn là chuyên gia đào tạo và ra đề thi trực tuyến cho Ngân hàng TMCP Đầu tư và Phát triển Việt Nam (BIDV).
+Hãy tạo một bộ câu hỏi tương tác gồm ${questionCount} câu hỏi về chủ đề: "${topic}".
+QUY ĐỊNH BẮT BUỘC:
+- CHỈ tạo đúng 2 loại câu hỏi:
+  1. Trắc nghiệm 4 lựa chọn (type: "multiple_choice"): Bắt buộc phải có đúng 4 phương án lựa chọn trong mảng options, trong đó có duy nhất 1 phương án có isCorrect: true.
+  2. Đúng / Sai (type: "true_false"): Bắt buộc phải có 2 phương án lựa chọn trong mảng options ("Đúng" và "Sai"), trong đó có 1 phương án có isCorrect: true.
+- TUYỆT ĐỐI KHÔNG TẠO câu hỏi điền từ (fill_blank) hay dạng ghép đôi.
 
 Trả về ĐÚNG định dạng JSON hợp lệ (không kèm markdown, không thêm text ngoài JSON) theo cấu trúc:
 {
-  "title": "Tên bộ câu hỏi trắc nghiệm",
+  "title": "Tên bộ câu hỏi",
   "description": "Mô tả ngắn gọn",
-  "category": "Danh mục nghiệp vụ",
+  "category": "Danh mục",
   "questions": [
     {
       "id": "q_1",
       "type": "multiple_choice",
-      "title": "Nội dung câu hỏi trắc nghiệm...",
+      "title": "Nội dung câu hỏi trắc nghiệm 4 đáp án...",
       "timeLimit": 20,
       "points": 1000,
       "options": [
         { "id": "opt_1", "text": "Phương án A", "isCorrect": false },
-        { "id": "opt_2", "text": "Phương án B (Chính xác)", "isCorrect": true },
+        { "id": "opt_2", "text": "Phương án B", "isCorrect": true },
         { "id": "opt_3", "text": "Phương án C", "isCorrect": false },
         { "id": "opt_4", "text": "Phương án D", "isCorrect": false }
       ]
@@ -640,7 +518,7 @@ Trả về ĐÚNG định dạng JSON hợp lệ (không kèm markdown, không t
     {
       "id": "q_2",
       "type": "true_false",
-      "title": "Nhận định sau đây là Đúng hay Sai...",
+      "title": "Nội dung câu hỏi Đúng/Sai...",
       "timeLimit": 15,
       "points": 1000,
       "options": [
@@ -706,7 +584,9 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
+    const distPath = fs.existsSync(path.join(currentDir, 'index.html'))
+      ? currentDir
+      : path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

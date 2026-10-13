@@ -3,43 +3,89 @@
  * Built with HTML5 Web Audio API for zero-latency, cross-platform synthesized sound effects and rhythms.
  */
 
+// Safe Storage Helper to prevent DOMException in Chrome Incognito or restricted iframes
+const safeStorage = {
+  getItem: (key: string): string | null => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        return window.localStorage.getItem(key);
+      }
+    } catch {
+      // Storage access blocked or restricted in Incognito/WebView
+    }
+    return null;
+  },
+  setItem: (key: string, value: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(key, value);
+      }
+    } catch {
+      // Storage access blocked
+    }
+  },
+};
+
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
   private masterVolume: number = 0.5;
   private loopInterval: number | null = null;
+  private isUnlocked: boolean = false;
 
   constructor() {
-    // Read user preference from localStorage if available
+    const savedMute = safeStorage.getItem('bidv_sound_muted');
+    if (savedMute !== null) {
+      this.isMuted = savedMute === 'true';
+    }
+    const savedVol = safeStorage.getItem('bidv_sound_volume');
+    if (savedVol !== null) {
+      this.masterVolume = parseFloat(savedVol) || 0.5;
+    }
+
     if (typeof window !== 'undefined') {
-      const savedMute = localStorage.getItem('bidv_sound_muted');
-      if (savedMute !== null) {
-        this.isMuted = savedMute === 'true';
-      }
-      const savedVol = localStorage.getItem('bidv_sound_volume');
-      if (savedVol !== null) {
-        this.masterVolume = parseFloat(savedVol) || 0.5;
-      }
+      this.setupAutoplayUnlock();
     }
   }
 
-  private initCtx() {
-    if (!this.ctx && typeof window !== 'undefined') {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx) {
-        this.ctx = new AudioCtx();
+  // Chrome Autoplay policy requires user gesture (click/touch) to resume suspended AudioContext
+  private setupAutoplayUnlock() {
+    const unlock = () => {
+      this.initCtx();
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
       }
-    }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.isUnlocked = true;
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('touchstart', unlock);
+      window.removeEventListener('touchend', unlock);
+    };
+
+    window.addEventListener('click', unlock, { once: true, passive: true });
+    window.addEventListener('touchstart', unlock, { once: true, passive: true });
+    window.addEventListener('touchend', unlock, { once: true, passive: true });
+  }
+
+  private initCtx() {
+    try {
+      if (!this.ctx && typeof window !== 'undefined') {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          this.ctx = new AudioCtx();
+        }
+      }
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+    } catch (e) {
+      // Web Audio not supported or blocked
+      console.warn('AudioContext init error:', e);
     }
   }
 
   public setMuted(muted: boolean) {
     this.isMuted = muted;
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('bidv_sound_muted', String(muted));
-    }
+    safeStorage.setItem('bidv_sound_muted', String(muted));
     if (muted) {
       this.stopLobbyMusic();
     }
@@ -51,9 +97,7 @@ class SoundEngine {
 
   public setVolume(vol: number) {
     this.masterVolume = Math.max(0, Math.min(1, vol));
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('bidv_sound_volume', String(this.masterVolume));
-    }
+    safeStorage.setItem('bidv_sound_volume', String(this.masterVolume));
   }
 
   public getVolume(): number {
@@ -63,26 +107,30 @@ class SoundEngine {
   // Play a single synthesized tone with ADSR envelope
   private playTone(freq: number, type: OscillatorType, duration: number, gainVal: number = 0.2, delay: number = 0) {
     if (this.isMuted) return;
-    this.initCtx();
-    if (!this.ctx) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
 
-    const startTime = this.ctx.currentTime + delay;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
+      const startTime = this.ctx.currentTime + delay;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
 
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, startTime);
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, startTime);
 
-    const targetGain = gainVal * this.masterVolume;
-    gain.gain.setValueAtTime(0.001, startTime);
-    gain.gain.exponentialRampToValueAtTime(targetGain, startTime + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+      const targetGain = gainVal * this.masterVolume;
+      gain.gain.setValueAtTime(0.001, startTime);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.001, targetGain), startTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
 
-    osc.connect(gain);
-    gain.connect(this.ctx.destination);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
 
-    osc.start(startTime);
-    osc.stop(startTime + duration + 0.05);
+      osc.start(startTime);
+      osc.stop(startTime + duration + 0.05);
+    } catch {
+      // Audio node failure on older engines safely caught
+    }
   }
 
   // Lobby Groovy Ambient Loop

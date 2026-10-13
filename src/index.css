@@ -6,7 +6,15 @@
     background-color: #f5f7f6;
     color: #1a2e22;
     -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
+}
+
+/* Chrome touch responsiveness & prevent selection during fast gameplay */
+button, [role="button"], input {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 /* Custom BIDV color variables */

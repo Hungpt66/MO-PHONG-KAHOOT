@@ -10,6 +10,36 @@ interface PlayerViewProps {
   onExit?: () => void;
 }
 
+// Safe Session Storage Helper for Chrome (Incognito & WebView resilient)
+const safeSessionStorage = {
+  getItem: (key: string): string | null => {
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        return window.sessionStorage.getItem(key);
+      }
+    } catch {
+      // incognito or restricted mode
+    }
+    return null;
+  },
+  setItem: (key: string, val: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.setItem(key, val);
+      }
+    } catch {}
+  },
+  removeItem: (key: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.removeItem(key);
+      }
+    } catch {}
+  },
+};
+
+const PLAYER_SESSION_PREFIX = 'bidv_player_sess_';
+
 export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit }) => {
   const [pin, setPin] = useState(initialPin);
   const [nickname, setNickname] = useState('');
@@ -28,45 +58,138 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
     rank?: number;
   } | null>(null);
 
-  // Fill in blank state
-  const [fillText, setFillText] = useState('');
-
   // External game postMessage handler ref
   const questionStartTimeRef = useRef<number>(Date.now());
+  const pollingTimerRef = useRef<number | null>(null);
 
   // Update PIN if initialPin changes
   useEffect(() => {
     if (initialPin) {
-      setPin(initialPin);
+      const clean = initialPin.replace(/\D/g, '').trim();
+      setPin(clean);
     }
   }, [initialPin]);
 
-  // Connect to SSE stream for live updates once joined
+  // Auto-restore session from sessionStorage on reload / tab restoration in Chrome
+  useEffect(() => {
+    if (currentPlayer) return;
+
+    const activePin = (pin || initialPin).replace(/\D/g, '').trim();
+    if (!activePin) return;
+
+    const saved = safeSessionStorage.getItem(PLAYER_SESSION_PREFIX + activePin);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed?.player && parsed?.roomPin === activePin) {
+          // Verify room is still active
+          fetch(`/api/rooms/${activePin}?_t=${Date.now()}`, {
+            headers: { 'Cache-Control': 'no-cache' },
+          })
+            .then((r) => r.json())
+            .then((roomData) => {
+              if (roomData && !roomData.error) {
+                const refreshedPlayer = roomData.players?.[parsed.player.id] || parsed.player;
+                setCurrentPlayer(refreshedPlayer);
+                setCurrentRoom(roomData);
+                setPin(activePin);
+              } else {
+                safeSessionStorage.removeItem(PLAYER_SESSION_PREFIX + activePin);
+              }
+            })
+            .catch(() => {});
+        }
+      } catch {}
+    }
+  }, [pin, initialPin]);
+
+  // Dual-Layer Live Sync: Server-Sent Events (SSE) + Fallback Polling for 100% Chrome stability
   useEffect(() => {
     if (!pin || !currentPlayer) return;
 
-    const eventSource = new EventSource(`/api/rooms/${pin}/events`);
+    let eventSource: EventSource | null = null;
+    let isSubscribed = true;
 
-    eventSource.onmessage = (event) => {
+    const syncRoomData = async () => {
       try {
-        const roomData: GameRoom = JSON.parse(event.data);
-        setCurrentRoom(roomData);
+        const res = await fetch(`/api/rooms/${pin}?_t=${Date.now()}`, {
+          headers: { 'Cache-Control': 'no-cache' },
+        });
+        if (res.ok && isSubscribed) {
+          const roomData: GameRoom = await res.json();
+          setCurrentRoom((prev) => {
+            if (!prev) return roomData;
+            // Only trigger state update if status, index or player count changed
+            if (
+              prev.status !== roomData.status ||
+              prev.currentQuestionIndex !== roomData.currentQuestionIndex ||
+              Object.keys(prev.players).length !== Object.keys(roomData.players).length ||
+              roomData.players[currentPlayer.id]?.score !== prev.players[currentPlayer.id]?.score
+            ) {
+              return roomData;
+            }
+            return prev;
+          });
 
-        // Update current player data from room
-        if (currentPlayer && roomData.players[currentPlayer.id]) {
-          setCurrentPlayer(roomData.players[currentPlayer.id]);
+          if (currentPlayer && roomData.players[currentPlayer.id]) {
+            setCurrentPlayer(roomData.players[currentPlayer.id]);
+          }
         }
-      } catch (err) {
-        console.error('SSE parse error:', err);
+      } catch {
+        // Transient network hiccup
       }
     };
 
-    eventSource.onerror = (err) => {
-      console.error('SSE error:', err);
+    // 1. Establish SSE if browser supports EventSource
+    if (typeof window !== 'undefined' && 'EventSource' in window) {
+      try {
+        eventSource = new EventSource(`/api/rooms/${pin}/events`);
+
+        eventSource.onmessage = (event) => {
+          if (!isSubscribed) return;
+          try {
+            const roomData: GameRoom = JSON.parse(event.data);
+            setCurrentRoom(roomData);
+
+            if (currentPlayer && roomData.players[currentPlayer.id]) {
+              setCurrentPlayer(roomData.players[currentPlayer.id]);
+            }
+          } catch (err) {
+            console.error('SSE parse error:', err);
+          }
+        };
+
+        eventSource.onerror = () => {
+          // On mobile Chrome or proxy disconnection, trigger immediate fallback poll
+          syncRoomData();
+        };
+      } catch {
+        // SSE blocked by proxy or old browser, fallback to polling
+      }
+    }
+
+    // 2. Fallback / heartbeat poller (every 2.5s) ensuring no updates are lost on sleep/wake
+    pollingTimerRef.current = window.setInterval(syncRoomData, 2500);
+
+    // 3. Tab focus / Visibility change listener (Chrome mobile tab switching)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncRoomData();
+      }
     };
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', syncRoomData);
 
     return () => {
-      eventSource.close();
+      isSubscribed = false;
+      if (eventSource) {
+        eventSource.close();
+      }
+      if (pollingTimerRef.current) {
+        clearInterval(pollingTimerRef.current);
+      }
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', syncRoomData);
     };
   }, [pin, currentPlayer?.id]);
 
@@ -75,7 +198,6 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
     if (currentRoom?.status === 'question') {
       setHasAnsweredCurrentQ(false);
       setLastResult(null);
-      setFillText('');
       questionStartTimeRef.current = Date.now();
     }
   }, [currentRoom?.status, currentRoom?.currentQuestionIndex]);
@@ -91,7 +213,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
         try {
           await fetch(`/api/rooms/${pin}/external-result`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
             body: JSON.stringify({
               playerId: currentPlayer?.id,
               score,
@@ -111,7 +233,8 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
   // Submit join form
   const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pin.trim()) {
+    const cleanPin = pin.replace(/\D/g, '').trim();
+    if (!cleanPin) {
       setErrorMsg('Vui lòng nhập mã PIN 6 số');
       return;
     }
@@ -124,9 +247,9 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
     setErrorMsg('');
 
     try {
-      const res = await fetch(`/api/rooms/${pin.trim()}/join`, {
+      const res = await fetch(`/api/rooms/${cleanPin}/join`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
         body: JSON.stringify({
           nickname: nickname.trim(),
           avatar: selectedAvatar,
@@ -137,14 +260,31 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
       if (data.success) {
         setCurrentPlayer(data.player);
         setCurrentRoom(data.room);
+        setPin(cleanPin);
+
+        // Save session in sessionStorage so page reload in Chrome restores gameplay
+        safeSessionStorage.setItem(
+          PLAYER_SESSION_PREFIX + cleanPin,
+          JSON.stringify({ player: data.player, roomPin: cleanPin })
+        );
       } else {
         setErrorMsg(data.error || 'Không thể tham gia phòng');
       }
     } catch (err) {
-      setErrorMsg('Lỗi kết nối máy chủ');
+      setErrorMsg('Lỗi kết nối máy chủ. Vui lòng kiểm tra lại mạng.');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Leave room
+  const handleLeaveRoom = () => {
+    if (pin) {
+      safeSessionStorage.removeItem(PLAYER_SESSION_PREFIX + pin);
+    }
+    setCurrentPlayer(null);
+    setCurrentRoom(null);
+    if (onExit) onExit();
   };
 
   // Submit Answer for standard questions
@@ -161,7 +301,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
     try {
       const res = await fetch(`/api/rooms/${pin}/answer`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
         body: JSON.stringify({
           playerId: currentPlayer.id,
           timeElapsedMs: elapsedMs,
@@ -314,6 +454,13 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
             <p className="text-xs text-white/70 mt-2">
               Hãy nhìn lên màn hình của Giảng viên để theo dõi câu hỏi khi bắt đầu.
             </p>
+            <button
+              type="button"
+              onClick={handleLeaveRoom}
+              className="mt-5 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs text-white/80 font-bold transition-all active:scale-95 border border-white/20"
+            >
+              Rời phòng / Đổi thông tin
+            </button>
           </div>
         </div>
       </div>
@@ -380,22 +527,48 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
           </div>
         </div>
 
-        {/* Kahoot 4-block layout on mobile */}
-        <div className="flex-1 grid grid-cols-2 gap-3 pb-2">
-          {KAHOOT_BUTTONS.map((btn, idx) => (
+        {/* Touch Answer Buttons */}
+        {currentRoom?.currentQuestionType === 'true_false' ? (
+          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-4 pb-2">
             <button
-              key={idx}
-              id={`player-opt-${idx}-btn`}
-              onClick={() => handleSubmitAnswer({ selectedOptionId: `opt_${idx + 1}` })}
-              className={`${btn.bg} rounded-3xl flex flex-col items-center justify-center text-white shadow-lg transition-transform active:scale-95 touch-manipulation`}
+              id="player-tf-true-btn"
+              type="button"
+              onClick={() => handleSubmitAnswer({ selectedOptionId: 'tf_1' })}
+              className="bg-[#008049] active:bg-[#005a33] rounded-3xl flex flex-col items-center justify-center text-white shadow-xl transition-transform active:scale-95 touch-manipulation border-b-6 border-[#005a33] py-8"
             >
-              <span className="text-5xl sm:text-6xl font-black drop-shadow-md select-none">{btn.shape}</span>
+              <span className="text-6xl sm:text-7xl font-black mb-2 select-none">✓</span>
+              <span className="text-2xl sm:text-3xl font-black tracking-wider uppercase select-none">ĐÚNG</span>
             </button>
-          ))}
-        </div>
+            <button
+              id="player-tf-false-btn"
+              type="button"
+              onClick={() => handleSubmitAnswer({ selectedOptionId: 'tf_2' })}
+              className="bg-[#E03E36] active:bg-[#b82b24] rounded-3xl flex flex-col items-center justify-center text-white shadow-xl transition-transform active:scale-95 touch-manipulation border-b-6 border-[#b82b24] py-8"
+            >
+              <span className="text-6xl sm:text-7xl font-black mb-2 select-none">✗</span>
+              <span className="text-2xl sm:text-3xl font-black tracking-wider uppercase select-none">SAI</span>
+            </button>
+          </div>
+        ) : (
+          <div className="flex-1 grid grid-cols-2 gap-3 pb-2">
+            {KAHOOT_BUTTONS.map((btn, idx) => (
+              <button
+                key={idx}
+                id={`player-opt-${idx}-btn`}
+                type="button"
+                onClick={() => handleSubmitAnswer({ selectedOptionId: `opt_${idx + 1}` })}
+                className={`${btn.bg} rounded-3xl flex flex-col items-center justify-center text-white shadow-lg transition-transform active:scale-95 touch-manipulation border-b-4 border-black/20`}
+              >
+                <span className="text-5xl sm:text-6xl font-black drop-shadow-md select-none">{btn.shape}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         <p className="text-center text-xs font-bold text-gray-500 py-1">
-          Nhìn câu hỏi trên màn hình Giảng viên và chọn hình tương ứng
+          {currentRoom?.currentQuestionType === 'true_false'
+            ? 'Chọn Đúng hoặc Sai theo nội dung câu hỏi trên màn hình Giảng viên'
+            : 'Nhìn câu hỏi trên màn hình Giảng viên và chọn hình tương ứng'}
         </p>
       </div>
     );
@@ -418,7 +591,9 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
           </p>
 
           <div className="p-4 bg-black/20 rounded-2xl text-xs text-emerald-100">
-            Hãy nhìn lên màn hình lớn để xem thống kê đáp án và bảng xếp hạng của cả lớp!
+            {currentRoom?.status === 'question_result'
+              ? 'Giảng viên đang tổng kết đáp án và chuẩn bị chuyển câu tiếp theo...'
+              : 'Hãy nhìn lên màn hình lớn để theo dõi Bảng Xếp Hạng của lớp!'}
           </div>
         </div>
       </div>
@@ -442,6 +617,17 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ initialPin = '', onExit 
 
           <div className="p-4 bg-black/20 rounded-2xl text-xs text-emerald-100 leading-relaxed">
             Kết quả của bạn đã được ghi nhận tự động vào sổ điểm LMS BIDV. Chúc mừng bạn đã hoàn thành xuất sắc!
+          </div>
+
+          <div className="mt-6">
+            <button
+              id="player-finish-exit-btn"
+              type="button"
+              onClick={handleLeaveRoom}
+              className="w-full py-3.5 rounded-2xl bg-[#FFCC00] hover:bg-yellow-400 text-[#004D2C] font-black text-sm shadow-md transition-all active:scale-95"
+            >
+              Quay Lại Màn Hình Tham Gia
+            </button>
           </div>
         </div>
       </div>
